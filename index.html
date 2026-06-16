@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Offline NFC Cashless Payment – DESFire EV2/EV3 Simulation</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { color-scheme: dark; }
+    body { background: radial-gradient(circle at top left, #1e1b4b, #020617 48%, #0f172a); }
+    .glas { background: rgba(15, 23, 42, .82); border: 1px solid rgba(129, 140, 248, .22); box-shadow: 0 20px 60px rgba(0,0,0,.32); backdrop-filter: blur(16px); }
+    .karte { transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+    .karte.aktiv { transform: translateY(-6px) scale(1.02); border-color: #818cf8; box-shadow: 0 0 0 3px rgba(99,102,241,.25), 0 20px 40px rgba(79,70,229,.25); }
+    .tab-aktiv { background: #4f46e5; color: white; }
+    .mono { font-variant-numeric: tabular-nums; }
+    canvas { image-rendering: pixelated; }
+  </style>
+</head>
+<body class="min-h-screen text-slate-100">
+  <main class="mx-auto max-w-7xl p-4 md:p-6">
+    <header class="mb-5 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+      <div>
+        <p class="text-sm uppercase tracking-[.28em] text-indigo-300">KassenSichV · GoBD · DESFire EV2/EV3</p>
+        <h1 class="text-3xl font-black md:text-5xl">Sicheres Offline-NFC-Bezahlsystem</h1>
+        <p class="mt-2 max-w-3xl text-slate-300">Reaktive Single-File-Simulation mit Schlüsseldiversifikation, MAC-Prüfung, atomarem Commit, TSE-Protokoll und DSFinV-K-nahem JSON-Export.</p>
+      </div>
+      <div class="rounded-2xl border border-indigo-400/30 bg-indigo-950/60 p-3 text-xs text-indigo-100">
+        <div>Event-AID: <b class="mono">0x202611</b></div>
+        <div>Kasse: <b id="terminalSeriennummer" class="mono"></b></div>
+        <div>Status: <b id="systemStatus">bereit</b></div>
+      </div>
+    </header>
+
+    <section class="grid gap-4 lg:grid-cols-[390px_1fr]">
+      <aside class="glas rounded-3xl p-4">
+        <h2 class="mb-3 text-xl font-bold">Physischer Kassen-Simulator</h2>
+        <div class="grid grid-cols-1 gap-3" id="kartenListe"></div>
+        <div class="mt-4 rounded-3xl border-2 border-dashed border-indigo-400/40 bg-slate-950/70 p-5 text-center">
+          <div class="text-5xl">📡</div>
+          <h3 class="mt-2 text-lg font-bold">NFC-Antennenfeld</h3>
+          <p id="readerText" class="mt-1 text-sm text-slate-300">Bitte virtuelle Karte auswählen.</p>
+          <div class="mt-4 rounded-2xl bg-slate-900 p-3 text-left text-xs">
+            <div>Authentifizierung: <span id="authStatus" class="font-bold text-slate-400">ausstehend</span></div>
+            <div>Zähler: <span id="counterStatus" class="mono">–</span></div>
+            <div>MAC: <span id="macStatus" class="mono break-all">–</span></div>
+          </div>
+        </div>
+        <label class="mt-4 flex items-center gap-3 rounded-2xl border border-amber-300/30 bg-amber-950/30 p-3 text-sm">
+          <input id="tornOff" type="checkbox" class="h-5 w-5 accent-amber-400" />
+          <span><b>Torn-Off-Simulation:</b> Karte während der Schreibphase wegziehen; der DESFIRE_COMMIT schlägt fehl.</span>
+        </label>
+      </aside>
+
+      <section class="glas rounded-3xl p-4">
+        <nav class="mb-4 grid grid-cols-3 gap-2 rounded-2xl bg-slate-950/60 p-2 text-sm font-bold">
+          <button class="tab tab-aktiv rounded-xl px-3 py-3" data-tab="kasse">Kasse</button>
+          <button class="tab rounded-xl px-3 py-3" data-tab="topup">Top-Up</button>
+          <button class="tab rounded-xl px-3 py-3" data-tab="labor">Sicherheits-Labor</button>
+        </nav>
+
+        <div id="tab-kasse" class="tabInhalt">
+          <h2 class="text-2xl font-black">Verkaufsterminal · nur Debit</h2>
+          <p class="text-sm text-slate-300">Dieses Terminal kann ausschließlich abbuchen. Aufladen ist kryptografisch und fachlich gesperrt.</p>
+          <div id="artikelRaster" class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-3"></div>
+          <div class="mt-4 rounded-2xl bg-slate-950/70 p-4">
+            <div class="flex items-center justify-between"><span>Warenkorb</span><button id="korbLeeren" class="text-sm text-indigo-300">leeren</button></div>
+            <div id="warenkorb" class="mt-2 min-h-12 text-sm text-slate-300">Noch keine Artikel gewählt.</div>
+            <div class="mt-3 flex items-end justify-between border-t border-slate-700 pt-3"><b>Gesamt</b><b id="summe" class="text-3xl">0,00 €</b></div>
+          </div>
+          <button id="abbuchen" class="mt-4 w-full rounded-2xl bg-indigo-600 px-5 py-4 text-xl font-black hover:bg-indigo-500">Jetzt atomar abbuchen</button>
+        </div>
+
+        <div id="tab-topup" class="tabInhalt hidden">
+          <h2 class="text-2xl font-black">Top-Up-Terminal · Credit erlaubt</h2>
+          <p class="text-sm text-slate-300">Aufladung als Mehrzweckgutschein/Zahlungsmitteltausch: keine Umsatzsteuer, Buchungstyp „Einzahlung (0% MwSt.)“.</p>
+          <div class="mt-4 grid grid-cols-3 gap-3">
+            <button class="topupBtn rounded-2xl bg-emerald-700 p-4 text-xl font-black" data-cent="1000">10 €</button>
+            <button class="topupBtn rounded-2xl bg-emerald-700 p-4 text-xl font-black" data-cent="2000">20 €</button>
+            <button class="topupBtn rounded-2xl bg-emerald-700 p-4 text-xl font-black" data-cent="5000">50 €</button>
+          </div>
+          <label class="mt-4 block text-sm">Freier Betrag in Euro<input id="topupBetrag" type="number" min="0" step="0.01" value="20.00" class="mt-2 w-full rounded-2xl border border-slate-700 bg-slate-950 p-4 text-xl" /></label>
+          <button id="aufladen" class="mt-4 w-full rounded-2xl bg-emerald-600 px-5 py-4 text-xl font-black hover:bg-emerald-500">Guthaben atomar aufladen</button>
+        </div>
+
+        <div id="tab-labor" class="tabInhalt hidden">
+          <h2 class="text-2xl font-black">Sicherheits-Labor</h2>
+          <p class="text-sm text-slate-300">Manipulieren Sie Chipdaten: Die nächste Terminalprüfung verweigert die Karte bei falscher MAC/Zähler-Kombination.</p>
+          <div class="mt-4 grid gap-3 md:grid-cols-2">
+            <button id="manipBalance" class="rounded-2xl bg-rose-700 p-4 font-bold">Guthaben ohne MAC erhöhen</button>
+            <button id="cloneCard" class="rounded-2xl bg-orange-700 p-4 font-bold">Daten auf andere UID klonen</button>
+            <button id="replay" class="rounded-2xl bg-yellow-700 p-4 font-bold">Alten Kartenzustand wieder einspielen</button>
+            <button id="repairDemo" class="rounded-2xl bg-slate-700 p-4 font-bold">Demo zurücksetzen</button>
+          </div>
+        </div>
+
+        <div class="mt-4 grid gap-4 xl:grid-cols-2">
+          <div class="rounded-2xl bg-slate-950/70 p-4"><h3 class="font-bold">Live-Kassenprotokoll</h3><div id="log" class="mt-2 max-h-52 overflow-auto text-xs text-slate-300"></div></div>
+          <div class="rounded-2xl bg-slate-950/70 p-4"><h3 class="font-bold">Kundendisplay · digitaler Bon</h3><canvas id="qr" width="196" height="196" class="mt-2 rounded-xl bg-white p-2"></canvas><pre id="bonText" class="mt-2 max-h-36 overflow-auto whitespace-pre-wrap text-xs text-slate-300">Noch kein Bon vorhanden.</pre></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="glas mt-4 rounded-3xl p-4">
+      <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><h2 class="text-2xl font-black">Lückenloses GoBD-Kassenarchiv</h2><button id="exportBtn" class="rounded-2xl bg-indigo-600 px-5 py-3 font-bold">DSFinV-K-nahen JSON-Export herunterladen</button></div>
+      <div class="mt-3 overflow-auto"><table class="w-full min-w-[920px] text-left text-sm"><thead class="text-indigo-200"><tr><th>Nr.</th><th>Zeit</th><th>Typ</th><th>Karte</th><th>Brutto</th><th>MwSt.</th><th>TSE-Zähler</th><th>Signatur</th></tr></thead><tbody id="archiv"></tbody></table></div>
+    </section>
+  </main>
+
+<script>
+/*
+  Produktive Architekturhinweise:
+  - Diese Browser-Simulation demonstriert die Sicherheitslogik. In echter Hardware liegen Master- und TSE-Schlüssel in HSM/SAM/TSE-Modulen.
+  - DESFire-Operationen werden logisch als Value File, Data File und Commit simuliert; echte Karten verwenden native EV2/EV3-Kommandos.
+*/
+const AID = '0x202611';
+const terminal = { seriennummer: 'DEMO-KASSE-2026-0001', rolle: 'DEBIT_ONLY' };
+const masterKeyHex = 'b9577f9af8d4f4b9c4db60f534deef46ec4c88d0cb13ee0f5f2b58025a98d001';
+const tseKeyHex = '92336489767e11a3950e8a86c152f2bf52cd78e018a2b7f2e1ef5c5f1d6529bb';
+const artikel = [
+  { name: 'Bier 0,4 l', preis: 450, ust: 19 }, { name: 'Limo', preis: 300, ust: 19 },
+  { name: 'Wasser', preis: 250, ust: 19 }, { name: 'Pommes', preis: 420, ust: 7 },
+  { name: 'Bratwurst', preis: 500, ust: 7 }, { name: 'Pfandbecher', preis: 200, ust: 0 }
+];
+let karten, aktiveKarteId, warenkorb = [], archiv = [], tseCounter = 0, txNummer = 0, snapshot = null;
+const $ = id => document.getElementById(id);
+const euro = c => (c/100).toLocaleString('de-DE', { style:'currency', currency:'EUR' });
+const hexToBytes = h => new Uint8Array(h.match(/.{2}/g).map(b => parseInt(b, 16)));
+const bytesToHex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2,'0')).join('');
+async function hmacHex(keyHex, text) {
+  const key = await crypto.subtle.importKey('raw', hexToBytes(keyHex), { name:'HMAC', hash:'SHA-256' }, false, ['sign']);
+  return bytesToHex(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)));
+}
+async function cardKey(uid) { return hmacHex(masterKeyHex, uid); }
+async function mac(card) { return hmacHex(await cardKey(card.uid), `${card.uid}:${card.balance}:${card.counter}`); }
+async function pruefeKarte(card) {
+  const erwartet = await mac(card);
+  if (erwartet !== card.mac) throw new Error('Krypto-Sperre: MAC passt nicht zu UID, Guthaben und monotonem Zähler.');
+  return true;
+}
+async function initialisiere() {
+  karten = [
+    { id:'gast-a', name:'Gast Anna', uid:'04A1B2C3D4E501', balance:3500, counter:1 },
+    { id:'gast-b', name:'Gast Ben', uid:'04F9E8D7C6B502', balance:1800, counter:1 },
+    { id:'gast-c', name:'Gast Cem', uid:'04112233445503', balance:6200, counter:1 }
+  ];
+  for (const k of karten) k.mac = await mac(k);
+  aktiveKarteId = karten[0].id; snapshot = structuredClone(karten[0]);
+  $('terminalSeriennummer').textContent = terminal.seriennummer;
+  zeichneAlles(); log('Systemstart: Master-Key bleibt geheim; Kartenschlüssel werden je UID per HMAC-SHA256 diversifiziert.');
+}
+function aktiveKarte(){ return karten.find(k => k.id === aktiveKarteId); }
+function log(t, ok=true){ $('log').innerHTML = `<div class="${ok?'text-emerald-300':'text-rose-300'}">${new Date().toLocaleTimeString('de-DE')} · ${t}</div>` + $('log').innerHTML; }
+function zeichneAlles(){ zeichneKarten(); zeichneArtikel(); zeichneKorb(); zeichneArchiv(); aktualisiereReader(); }
+function zeichneKarten(){ $('kartenListe').innerHTML = karten.map(k => `<button class="karte ${k.id===aktiveKarteId?'aktiv':''} rounded-2xl border border-slate-700 bg-slate-950 p-4 text-left" data-card="${k.id}"><div class="flex justify-between"><b>${k.name}</b><span>${euro(k.balance)}</span></div><div class="mono mt-1 text-xs text-slate-400">UID ${k.uid} · Zähler ${k.counter}</div></button>`).join(''); document.querySelectorAll('[data-card]').forEach(b=>b.onclick=()=>{aktiveKarteId=b.dataset.card; snapshot=structuredClone(aktiveKarte()); zeichneAlles();}); }
+function zeichneArtikel(){ $('artikelRaster').innerHTML = artikel.map((a,i)=>`<button class="rounded-2xl bg-slate-800 p-4 text-left hover:bg-indigo-900" data-art="${i}"><b>${a.name}</b><div>${euro(a.preis)} · ${a.ust}% MwSt.</div></button>`).join(''); document.querySelectorAll('[data-art]').forEach(b=>b.onclick=()=>{warenkorb.push(artikel[+b.dataset.art]); zeichneKorb();}); }
+function zeichneKorb(){ const sum = warenkorb.reduce((s,a)=>s+a.preis,0); $('warenkorb').innerHTML = warenkorb.length ? warenkorb.map(a=>`<div class="flex justify-between"><span>${a.name} (${a.ust}%)</span><b>${euro(a.preis)}</b></div>`).join('') : 'Noch keine Artikel gewählt.'; $('summe').textContent = euro(sum); }
+function zeichneArchiv(){ $('archiv').innerHTML = archiv.map(e=>`<tr class="border-t border-slate-800"><td>${e.transaktionsnummer}</td><td>${new Date(e.ende).toLocaleString('de-DE')}</td><td>${e.buchungstyp}</td><td class="mono">${e.karteUid}</td><td>${e.brutto}</td><td>${e.mwst}</td><td>${e.tse.signaturzaehler}</td><td class="mono">${e.tse.signatur.slice(0,24)}…</td></tr>`).join(''); }
+function aktualisiereReader(){ const k=aktiveKarte(); $('readerText').textContent = `${k.name} liegt am Reader · ${euro(k.balance)}`; $('counterStatus').textContent = k.counter; $('macStatus').textContent = k.mac.slice(0,32)+'…'; }
+function beep(ok){ const ctx = new AudioContext(); const tones = ok ? [880, 1320] : [110, 90]; tones.forEach((f,i)=>{ const o=ctx.createOscillator(), g=ctx.createGain(); o.frequency.value=f; o.connect(g); g.connect(ctx.destination); g.gain.setValueAtTime(.001, ctx.currentTime+i*.13); g.gain.exponentialRampToValueAtTime(.18, ctx.currentTime+i*.13+.02); g.gain.exponentialRampToValueAtTime(.001, ctx.currentTime+i*.13+.12); o.start(ctx.currentTime+i*.13); o.stop(ctx.currentTime+i*.13+.13); }); }
+async function atomareKartentransaktion({typ, betrag, items=[]}) {
+  const start = new Date().toISOString(); const card = aktiveKarte(); await pruefeKarte(card);
+  if (typ === 'debit' && betrag > card.balance) throw new Error('Guthaben reicht nicht aus.');
+  const neu = typ === 'credit' ? card.balance + betrag : card.balance - betrag;
+  const pending = { ...card, balance: neu, counter: card.counter + 1 };
+  pending.mac = await mac(pending);
+  if ($('tornOff').checked) throw new Error('DESFIRE_COMMIT fehlgeschlagen: Karte wurde vor physischer Bestätigung entfernt. Rollback aktiv.');
+  Object.assign(card, pending); // simulierter DESFIRE_COMMIT: erst hier wird dauerhaft geschrieben
+  const ende = new Date().toISOString();
+  const eintrag = await erstelleTseEintrag({ start, ende, typ, betrag, card, items });
+  archiv.push(eintrag); snapshot = structuredClone(card); zeichneAlles(); zeichneBon(eintrag); beep(true); return eintrag;
+}
+async function erstelleTseEintrag({start, ende, typ, betrag, card, items}){
+  txNummer++; tseCounter++;
+  const steuer = {}; items.forEach(a => { const netto = Math.round(a.preis / (1 + a.ust/100)); const ust = a.preis - netto; steuer[a.ust] = (steuer[a.ust]||0) + ust; });
+  const mwstText = typ==='credit' ? '0,00 € (Mehrzweckgutschein)' : Object.entries(steuer).map(([s,c])=>`${s}%: ${euro(c)}`).join(', ');
+  const kern = { transaktionsnummer: txNummer, start, ende, terminal: terminal.seriennummer, karteUid: card.uid, buchungstyp: typ==='credit'?'Einzahlung (0% MwSt.)':'Umsatz (7%/19% MwSt.)', brutto: euro(betrag), mwst: mwstText, artikel: items };
+  const signatur = await hmacHex(tseKeyHex, JSON.stringify(kern)+':'+tseCounter);
+  return { ...kern, aid:AID, kartenzaehler: card.counter, tse:{ seriennummer:'CLOUD-TSE-SIM-2026-001', signaturzaehler:tseCounter, signaturverfahren:'HMAC-SHA256', signatur } };
+}
+function zeichneBon(e){ $('bonText').textContent = JSON.stringify(e, null, 2); zeichneQr(JSON.stringify(e)); }
+function zeichneQr(text){ const c=$('qr'), ctx=c.getContext('2d'), n=33, cell=Math.floor(c.width/n); ctx.fillStyle='white'; ctx.fillRect(0,0,c.width,c.height); const data=new TextEncoder().encode(text); function bit(x,y){ let v=(x*73+y*151+data[(x+y)%data.length])&255; return (v ^ (v>>3)) & 1; } function finder(x,y){ ctx.fillStyle='black'; ctx.fillRect(x*cell,y*cell,7*cell,7*cell); ctx.fillStyle='white'; ctx.fillRect((x+1)*cell,(y+1)*cell,5*cell,5*cell); ctx.fillStyle='black'; ctx.fillRect((x+2)*cell,(y+2)*cell,3*cell,3*cell); } finder(1,1); finder(25,1); finder(1,25); ctx.fillStyle='black'; for(let y=0;y<n;y++) for(let x=0;x<n;x++){ if((x<9&&y<9)||(x>23&&y<9)||(x<9&&y>23)) continue; if(bit(x,y)) ctx.fillRect(x*cell,y*cell,cell,cell); } }
+async function sichereAktion(fn){ try { $('systemStatus').textContent='Transaktion läuft'; await fn(); log('Transaktion erfolgreich committed.'); } catch(e){ beep(false); log(e.message, false); } finally { $('systemStatus').textContent='bereit'; aktualisiereReader(); } }
+document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ document.querySelectorAll('.tab').forEach(x=>x.classList.remove('tab-aktiv')); b.classList.add('tab-aktiv'); document.querySelectorAll('.tabInhalt').forEach(x=>x.classList.add('hidden')); $(`tab-${b.dataset.tab}`).classList.remove('hidden'); });
+$('korbLeeren').onclick=()=>{warenkorb=[]; zeichneKorb();};
+$('abbuchen').onclick=()=>sichereAktion(async()=>{ const sum=warenkorb.reduce((s,a)=>s+a.preis,0); if(!sum) throw new Error('Warenkorb ist leer.'); await atomareKartentransaktion({typ:'debit', betrag:sum, items:[...warenkorb]}); warenkorb=[]; zeichneKorb(); });
+$('aufladen').onclick=()=>sichereAktion(async()=>{ const cent=Math.round(parseFloat($('topupBetrag').value||'0')*100); if(cent<=0) throw new Error('Aufladebetrag muss positiv sein.'); await atomareKartentransaktion({typ:'credit', betrag:cent}); });
+document.querySelectorAll('.topupBtn').forEach(b=>b.onclick=()=>{$('topupBetrag').value=(+b.dataset.cent/100).toFixed(2);});
+$('manipBalance').onclick=()=>{ aktiveKarte().balance += 10000; zeichneAlles(); log('Labor: Guthaben ohne neue MAC erhöht.', false); };
+$('cloneCard').onclick=()=>{ const a=aktiveKarte(), ziel=karten.find(k=>k.id!==a.id); ziel.balance=a.balance; ziel.counter=a.counter; ziel.mac=a.mac; aktiveKarteId=ziel.id; zeichneAlles(); log('Labor: Dateidaten auf andere UID kopiert. Ableitungsschlüssel passt nun nicht mehr.', false); };
+$('replay').onclick=()=>{ if(snapshot) Object.assign(aktiveKarte(), structuredClone(snapshot)); zeichneAlles(); log('Labor: alter Kartenzustand wieder eingespielt; Replay wird bei MAC/Zähler-Prüfung sichtbar.', false); };
+$('repairDemo').onclick=initialisiere;
+$('exportBtn').onclick=()=>{ const blob=new Blob([JSON.stringify({schema:'DSFinV-K-nahe Simulation', exportiertAm:new Date().toISOString(), aid:AID, terminal, archiv}, null, 2)], {type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='gobd-dsfinvk-export.json'; a.click(); URL.revokeObjectURL(a.href); };
+initialisiere();
+</script>
+</body>
+</html>
